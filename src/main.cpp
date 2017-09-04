@@ -162,7 +162,6 @@ vector<double> getXY(double s, double d, vector<double> maps_s, vector<double> m
 
 const double MPH_TO_MPS = 1609.34 / 3600;
 double ref_v = 49 * MPH_TO_MPS; // reference vel in m/s
-int lane = 1;
 
 int main() {
   uWS::Hub h;
@@ -239,71 +238,36 @@ int main() {
           	auto sensor_fusion = j[1]["sensor_fusion"];
             int prev_size = previous_path_x.size();
 
-          	json msgJson;
-
-            double SAFE_DIST = 2; // metres
-            double PRED_STEPS_HORIZON = 50;
-            double PRED_TIME_HORIZON = PRED_STEPS_HORIZON * 0.02; // secs
-            double COLLISION_TIME_HORIZON = 5;
+            const double SAFE_DIST = 2; // metres
+            const double PRED_STEPS_HORIZON = 50;
+            const double PRED_TIME_HORIZON = PRED_STEPS_HORIZON * 0.02; // secs
             double car_v = car_speed * MPH_TO_MPS;
 
-            int our_lane_min = lane * 4;
-            int our_lane_max = lane * 4 + 4;
-            bool collision = false;
-            int min_collision_s = 10000000;
-
-            // sensor fusion data: id, x, y, vx, vy, s, d
-            for (int i = 0; i < sensor_fusion.size(); i++) {
-              int d = sensor_fusion[i][6];
-              double ss = sensor_fusion[i][5];
-              if (ss > car_s && d >= our_lane_min && d <= our_lane_max) {
-                // car ahead in our lane
-                double svx = sensor_fusion[i][3];
-                double svy = sensor_fusion[i][4];
-                double sv = sqrt(svx * svx + svy * svy) * MPH_TO_MPS;
-                // look ahead few secs
-                if (ss + sv * COLLISION_TIME_HORIZON - SAFE_DIST < car_s + car_v * COLLISION_TIME_HORIZON) {
-                  collision = true;
-                  if (ss + sv * COLLISION_TIME_HORIZON - SAFE_DIST < min_collision_s) {
-                    min_collision_s = ss + sv * COLLISION_TIME_HORIZON - SAFE_DIST;
-                  }
-                }
-              }
-            }
-
-            double ideal_v = ref_v;
-            if (collision) {
-              ideal_v = (min_collision_s - car_s) / COLLISION_TIME_HORIZON;
-            } 
-            ideal_v = std::max(0.0, ideal_v);
-            ideal_v = std::min(ref_v, ideal_v);
-           
-            double new_car_v = car_v; 
-            if (car_v < ideal_v) {
-              new_car_v = car_v + 1;
-            } else if (car_v > ideal_v) {
-              new_car_v = car_v - 1;
-            }
-
-            std::cout << collision << " min_s:" << min_collision_s << " ideal_v:" << ideal_v << " car_v:" << car_v << " new_v:" << new_car_v << std::endl;
-            //double s_delta = new_car_v * 0.02;
+          	json msgJson;
 
             vector<double> ptsx;
             vector<double> ptsy; 
 
             double ref_x = car_x;
             double ref_y = car_y;
+            int end_car_lane = end_path_d / 4;
+            double end_car_s = end_path_s;
+
             double ref_yaw = deg2rad(car_yaw);
 
             if (prev_size < 2) {
-              double prev_car_x = car_x - cos(car_yaw);
-              double prev_car_y = car_y - sin(car_yaw);
+              double speed = std::max(car_speed, 1.0);
+              double prev_car_x = car_x - speed * 0.02 * cos(car_yaw);
+              double prev_car_y = car_y - speed * 0.02 * sin(car_yaw);
 
               ptsx.push_back(prev_car_x);
               ptsx.push_back(car_x);
 
               ptsy.push_back(prev_car_y);
               ptsy.push_back(car_y);
+
+              end_car_lane = car_d / 4;
+              end_car_s = car_s;
             } else {
               ref_x = previous_path_x[prev_size - 1];
               ref_y = previous_path_y[prev_size - 1];
@@ -316,11 +280,72 @@ int main() {
               ptsy.push_back(ref_y);
             }
 
+            cout << "ecl: " << end_car_lane << " ecs: " << end_car_s << std::endl;
+            vector<int> min_collision_s = {10000, 10000, 10000};
+            vector<bool> collision = {false, false, false};
+            const double COL_TIME_HORIZON = 5;
+            // sensor fusion data: id, x, y, vx, vy, s, d
+            for (int i = 0; i < sensor_fusion.size(); i++) {
+              int d = sensor_fusion[i][6];
+              double ss = sensor_fusion[i][5];
+              double svx = sensor_fusion[i][3];
+              double svy = sensor_fusion[i][4];
+              double sv = sqrt(svx * svx + svy * svy) * MPH_TO_MPS;
+              int slane = d / 4;
+
+              // look ahead few secs
+              if (ss + sv * (COL_TIME_HORIZON + prev_size * 0.02) - SAFE_DIST < end_car_s + car_v * COL_TIME_HORIZON) {
+                collision[slane] = true;
+                if (ss + sv * (COL_TIME_HORIZON + prev_size * 0.02) - SAFE_DIST < min_collision_s[slane]) {
+                  min_collision_s[slane] = ss + sv * (COL_TIME_HORIZON + prev_size * 0.02) - SAFE_DIST;
+                }
+              }
+            }
+
+            vector<int> next_lanes = {end_car_lane};
+            if (end_car_lane != 0)
+              next_lanes.push_back(end_car_lane - 1);
+            if (end_car_lane != 2)
+              next_lanes.push_back(end_car_lane + 1);
+
+            vector<double> cost(next_lanes.size(), 100000000);
+            vector<double> speed(next_lanes.size(), ref_v);
+            double best_next_v = 0;
+            int best_next_lane = next_lanes[0];
+            
+            for (int i = 0; i < next_lanes.size(); i++) {
+              int l = next_lanes[i];
+              double ideal_v = ref_v;
+              if (collision[l]) {
+                ideal_v = (min_collision_s[l] - end_car_s) / COL_TIME_HORIZON;
+              }
+              ideal_v = std::max(0.0, ideal_v);
+              ideal_v = std::min(ref_v, ideal_v);
+           
+              double new_car_v = car_v;
+              if (car_v < ideal_v) {
+                new_car_v = car_v + 1;
+              } else if (car_v > ideal_v) {
+                new_car_v = car_v - 1;
+              }
+
+              speed[i] = new_car_v;
+              if (new_car_v > best_next_v) {
+                best_next_v = new_car_v;
+                best_next_lane = l;
+              }
+            }
+            std::cout << "nbv: " << best_next_v <<
+              " nbl: " << best_next_lane << std::endl;
+
+            //std::cout << collision << " min_s:" << min_collision_s << " ideal_v:" << ideal_v << " car_v:" << car_v << " new_v:" << new_car_v << std::endl;
+            //double s_delta = new_car_v * 0.02;
+
             vector<vector<double>> next_mp;
             double wp_delta = 30;
             for (int i = 0; i < 3; i++) {
-              double d = (i + 1) * wp_delta;
-              vector<double> wp = getXY(car_s + d, 2 + 4 * lane,
+              double delta = (i + 1) * wp_delta;
+              vector<double> wp = getXY(end_car_s + delta, 2 + 4 * best_next_lane,
                 map_waypoints_s, map_waypoints_x, map_waypoints_y);
               next_mp.push_back(wp);
               ptsx.push_back(wp[0]);
@@ -335,7 +360,7 @@ int main() {
               ptsx[i] = (shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw));
               ptsy[i] = (shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw));
             }
-
+            
             tk::spline s;
             s.set_points(ptsx, ptsy);
 
@@ -348,7 +373,7 @@ int main() {
 
             for (int i = 1; i <= PRED_STEPS_HORIZON - previous_path_x.size();
                 i++) {
-              double N = (target_dist/(0.02 * new_car_v));
+              double N = (target_dist/(0.02 * best_next_v));
               double x_point = i * target_x / N;
               double y_point = s(x_point);
 
