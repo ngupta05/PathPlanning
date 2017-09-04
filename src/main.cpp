@@ -238,7 +238,7 @@ int main() {
           	auto sensor_fusion = j[1]["sensor_fusion"];
             int prev_size = previous_path_x.size();
 
-            const double SAFE_DIST = 2; // metres
+            const double SAFE_DIST = 5; // metres
             const double PRED_STEPS_HORIZON = 50;
             const double PRED_TIME_HORIZON = PRED_STEPS_HORIZON * 0.02; // secs
             double car_v = car_speed * MPH_TO_MPS;
@@ -283,11 +283,12 @@ int main() {
               end_car_v = sqrt(std::pow(ref_x - prev_ref_x, 2) + std::pow(ref_y - prev_ref_y, 2)) / 0.02;
             }
 
-            cout << "ecl: " << end_car_lane << " ecs: " << end_car_s << 
-              " ecv: " << end_car_v << std::endl;
+            //cout << "ecl: " << end_car_lane << " ecs: " << end_car_s << 
+            //  " ecv: " << end_car_v << std::endl;
             vector<int> min_collision_s = {10000, 10000, 10000};
             vector<bool> collision = {false, false, false};
-            const double COL_TIME_HORIZON = 5;
+            const double COL_TIME_HORIZON = 15 / end_car_v;
+
             // sensor fusion data: id, x, y, vx, vy, s, d
             for (int i = 0; i < sensor_fusion.size(); i++) {
               int sd = sensor_fusion[i][6];
@@ -296,13 +297,13 @@ int main() {
               double svy = sensor_fusion[i][4];
               double sv = sqrt(svx * svx + svy * svy) * MPH_TO_MPS;
               int slane = sd / 4;
-              double est_other_end_s = ss + sv * (COL_TIME_HORIZON + prev_size * 0.02) - SAFE_DIST;
+              double est_other_end_s = ss + sv * (COL_TIME_HORIZON + prev_size * 0.02);
               double est_ego_end_s = end_car_s + end_car_v * COL_TIME_HORIZON;
 
               // cond 1: car is currently behind ego, but will be ahead in future
               // cond 2: car is currently ahead of ego, but will be behind in future
-              if ((ss <= car_s && est_other_end_s >= est_ego_end_s) ||
-                  (ss >= car_s && est_other_end_s <= est_ego_end_s)) {
+              if ((ss <= car_s && est_other_end_s + SAFE_DIST >= est_ego_end_s) ||
+                  (ss >= car_s && est_other_end_s - SAFE_DIST <= est_ego_end_s)) {
 
                 collision[slane] = true;
                 if (est_other_end_s < min_collision_s[slane]) {
