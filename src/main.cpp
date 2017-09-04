@@ -252,11 +252,12 @@ int main() {
             double ref_y = car_y;
             int end_car_lane = end_path_d / 4;
             double end_car_s = end_path_s;
+            double end_car_v = car_v;
 
             double ref_yaw = deg2rad(car_yaw);
 
             if (prev_size < 2) {
-              double speed = std::max(car_speed, 1.0);
+              double speed = std::max(car_v, 1.0);
               double prev_car_x = car_x - speed * 0.02 * cos(car_yaw);
               double prev_car_y = car_y - speed * 0.02 * sin(car_yaw);
 
@@ -278,26 +279,34 @@ int main() {
               ptsx.push_back(ref_x);
               ptsy.push_back(prev_ref_y);
               ptsy.push_back(ref_y);
+
+              end_car_v = sqrt(std::pow(ref_x - prev_ref_x, 2) + std::pow(ref_y - prev_ref_y, 2)) / 0.02;
             }
 
-            cout << "ecl: " << end_car_lane << " ecs: " << end_car_s << std::endl;
+            cout << "ecl: " << end_car_lane << " ecs: " << end_car_s << 
+              " ecv: " << end_car_v << std::endl;
             vector<int> min_collision_s = {10000, 10000, 10000};
             vector<bool> collision = {false, false, false};
             const double COL_TIME_HORIZON = 5;
             // sensor fusion data: id, x, y, vx, vy, s, d
             for (int i = 0; i < sensor_fusion.size(); i++) {
-              int d = sensor_fusion[i][6];
+              int sd = sensor_fusion[i][6];
               double ss = sensor_fusion[i][5];
               double svx = sensor_fusion[i][3];
               double svy = sensor_fusion[i][4];
               double sv = sqrt(svx * svx + svy * svy) * MPH_TO_MPS;
-              int slane = d / 4;
+              int slane = sd / 4;
+              double est_other_end_s = ss + sv * (COL_TIME_HORIZON + prev_size * 0.02) - SAFE_DIST;
+              double est_ego_end_s = end_car_s + end_car_v * COL_TIME_HORIZON;
 
-              // look ahead few secs
-              if (ss + sv * (COL_TIME_HORIZON + prev_size * 0.02) - SAFE_DIST < end_car_s + car_v * COL_TIME_HORIZON) {
+              // cond 1: car is currently behind ego, but will be ahead in future
+              // cond 2: car is currently ahead of ego, but will be behind in future
+              if ((ss <= car_s && est_other_end_s >= est_ego_end_s) ||
+                  (ss >= car_s && est_other_end_s <= est_ego_end_s)) {
+
                 collision[slane] = true;
-                if (ss + sv * (COL_TIME_HORIZON + prev_size * 0.02) - SAFE_DIST < min_collision_s[slane]) {
-                  min_collision_s[slane] = ss + sv * (COL_TIME_HORIZON + prev_size * 0.02) - SAFE_DIST;
+                if (est_other_end_s < min_collision_s[slane]) {
+                  min_collision_s[slane] = est_other_end_s;
                 }
               }
             }
@@ -317,16 +326,14 @@ int main() {
               int l = next_lanes[i];
               double ideal_v = ref_v;
               if (collision[l]) {
-                ideal_v = (min_collision_s[l] - end_car_s) / COL_TIME_HORIZON;
+                ideal_v = 0;
               }
-              ideal_v = std::max(0.0, ideal_v);
-              ideal_v = std::min(ref_v, ideal_v);
            
-              double new_car_v = car_v;
-              if (car_v < ideal_v) {
-                new_car_v = car_v + 1;
-              } else if (car_v > ideal_v) {
-                new_car_v = car_v - 1;
+              double new_car_v = end_car_v;
+              if (new_car_v < ideal_v) {
+                new_car_v += 0.2;
+              } else if (new_car_v > ideal_v) {
+                new_car_v -= 0.2;
               }
 
               speed[i] = new_car_v;
@@ -334,9 +341,12 @@ int main() {
                 best_next_v = new_car_v;
                 best_next_lane = l;
               }
+              //std::cout << "l: " << l << " v: " << new_car_v << " ";
             }
-            std::cout << "nbv: " << best_next_v <<
-              " nbl: " << best_next_lane << std::endl;
+            //std::cout << std::endl;
+
+            //std::cout << "nbv: " << best_next_v <<
+            //  " nbl: " << best_next_lane << std::endl;
 
             //std::cout << collision << " min_s:" << min_collision_s << " ideal_v:" << ideal_v << " car_v:" << car_v << " new_v:" << new_car_v << std::endl;
             //double s_delta = new_car_v * 0.02;
