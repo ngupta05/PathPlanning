@@ -8,6 +8,7 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 
@@ -159,6 +160,10 @@ vector<double> getXY(double s, double d, vector<double> maps_s, vector<double> m
 
 }
 
+const double MPH_TO_MPS = 1609.34 / 3600;
+double ref_v = 49 * MPH_TO_MPS; // reference vel in m/s
+int lane = 1;
+
 int main() {
   uWS::Hub h;
 
@@ -232,14 +237,145 @@ int main() {
 
           	// Sensor Fusion Data, a list of all other cars on the same side of the road.
           	auto sensor_fusion = j[1]["sensor_fusion"];
+            int prev_size = previous_path_x.size();
 
           	json msgJson;
 
-          	vector<double> next_x_vals;
-          	vector<double> next_y_vals;
+            double SAFE_DIST = 2; // metres
+            double PRED_STEPS_HORIZON = 50;
+            double PRED_TIME_HORIZON = PRED_STEPS_HORIZON * 0.02; // secs
+            double COLLISION_TIME_HORIZON = 5;
+            double car_v = car_speed * MPH_TO_MPS;
+
+            int our_lane_min = lane * 4;
+            int our_lane_max = lane * 4 + 4;
+            bool collision = false;
+            int min_collision_s = 10000000;
+
+            // sensor fusion data: id, x, y, vx, vy, s, d
+            for (int i = 0; i < sensor_fusion.size(); i++) {
+              int d = sensor_fusion[i][6];
+              double ss = sensor_fusion[i][5];
+              if (ss > car_s && d >= our_lane_min && d <= our_lane_max) {
+                // car ahead in our lane
+                double svx = sensor_fusion[i][3];
+                double svy = sensor_fusion[i][4];
+                double sv = sqrt(svx * svx + svy * svy) * MPH_TO_MPS;
+                // look ahead few secs
+                if (ss + sv * COLLISION_TIME_HORIZON - SAFE_DIST < car_s + car_v * COLLISION_TIME_HORIZON) {
+                  collision = true;
+                  if (ss + sv * COLLISION_TIME_HORIZON - SAFE_DIST < min_collision_s) {
+                    min_collision_s = ss + sv * COLLISION_TIME_HORIZON - SAFE_DIST;
+                  }
+                }
+              }
+            }
+
+            double ideal_v = ref_v;
+            if (collision) {
+              ideal_v = (min_collision_s - car_s) / COLLISION_TIME_HORIZON;
+            } 
+            ideal_v = std::max(0.0, ideal_v);
+            ideal_v = std::min(ref_v, ideal_v);
+           
+            double new_car_v = car_v; 
+            if (car_v < ideal_v) {
+              new_car_v = car_v + 1;
+            } else if (car_v > ideal_v) {
+              new_car_v = car_v - 1;
+            }
+
+            std::cout << collision << " min_s:" << min_collision_s << " ideal_v:" << ideal_v << " car_v:" << car_v << " new_v:" << new_car_v << std::endl;
+            //double s_delta = new_car_v * 0.02;
+
+            vector<double> ptsx;
+            vector<double> ptsy; 
+
+            double ref_x = car_x;
+            double ref_y = car_y;
+            double ref_yaw = deg2rad(car_yaw);
+
+            if (prev_size < 2) {
+              double prev_car_x = car_x - cos(car_yaw);
+              double prev_car_y = car_y - sin(car_yaw);
+
+              ptsx.push_back(prev_car_x);
+              ptsx.push_back(car_x);
+
+              ptsy.push_back(prev_car_y);
+              ptsy.push_back(car_y);
+            } else {
+              ref_x = previous_path_x[prev_size - 1];
+              ref_y = previous_path_y[prev_size - 1];
+              double prev_ref_x = previous_path_x[prev_size - 2];
+              double prev_ref_y = previous_path_y[prev_size - 2];
+              ref_yaw = atan2(ref_y - prev_ref_y, ref_x - prev_ref_x);
+              ptsx.push_back(prev_ref_x);
+              ptsx.push_back(ref_x);
+              ptsy.push_back(prev_ref_y);
+              ptsy.push_back(ref_y);
+            }
+
+            vector<vector<double>> next_mp;
+            double wp_delta = 30;
+            for (int i = 0; i < 3; i++) {
+              double d = (i + 1) * wp_delta;
+              vector<double> wp = getXY(car_s + d, 2 + 4 * lane,
+                map_waypoints_s, map_waypoints_x, map_waypoints_y);
+              next_mp.push_back(wp);
+              ptsx.push_back(wp[0]);
+              ptsy.push_back(wp[1]);
+            }
+
+            // convert to car local frame ref
+            for (int i = 0; i < ptsx.size(); i++) {
+              double shift_x = ptsx[i] - ref_x;
+              double shift_y = ptsy[i] - ref_y;
+
+              ptsx[i] = (shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw));
+              ptsy[i] = (shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw));
+            }
+
+            tk::spline s;
+            s.set_points(ptsx, ptsy);
+
+            double target_x = 30.0;
+            double target_y = s(target_x);
+            double target_dist = sqrt(target_x * target_x + target_y * target_y);
+
+          	vector<double> next_x_vals = previous_path_x;
+          	vector<double> next_y_vals = previous_path_y;
+
+            for (int i = 1; i <= PRED_STEPS_HORIZON - previous_path_x.size();
+                i++) {
+              double N = (target_dist/(0.02 * new_car_v));
+              double x_point = i * target_x / N;
+              double y_point = s(x_point);
+
+              double x_ref = x_point;
+              double y_ref = y_point;
+
+              x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
+              y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw); 
+
+              x_point += ref_x;
+              y_point += ref_y;
+
+              next_x_vals.push_back(x_point);
+              next_y_vals.push_back(y_point);
+            }
 
 
-          	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
+            /*for(int i = 0; i < PRED_STEPS_HORIZON; i++) {
+              double next_s = car_s + (i+1) * s_delta;
+              double next_d = 2 + lane * 4;
+              auto vec = getXY(next_s, next_d, map_waypoints_s,
+                  map_waypoints_x, map_waypoints_y);
+                
+              next_x_vals.push_back(vec[0]);
+              next_y_vals.push_back(vec[1]);
+            }*/
+
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
 
