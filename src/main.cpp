@@ -286,6 +286,7 @@ int main() {
             //cout << "ecl: " << end_car_lane << " ecs: " << end_car_s << 
             //  " ecv: " << end_car_v << std::endl;
             vector<int> min_collision_s = {10000, 10000, 10000};
+            vector<int> leading_speed = {50, 50, 50};
             vector<bool> collision = {false, false, false};
             //const double COL_TIME_HORIZON = 15 / end_car_v;
 
@@ -302,14 +303,17 @@ int main() {
               // ss + sv * (prev_size * 0.02 + t) = end_car_s + end_car_v * t;
               double time_to_collision = (ss - end_car_s + sv * prev_size * 0.02) / (end_car_v - sv);
 
+              bool same_lane = (slane == end_car_lane);
 
-              if (time_to_collision >= -5 && time_to_collision <= 5)
+              if ((!same_lane && time_to_collision >= -5 && time_to_collision <= 5) ||
+                  (same_lane && time_to_collision >= 0 && time_to_collision <= 5))
               {
                 collision[slane] = true;
                 double dist_to_col = end_car_s + end_car_v * time_to_collision;
                 dist_to_col = std::max(dist_to_col, end_car_s);
                 if (dist_to_col < min_collision_s[slane]) {
                   min_collision_s[slane] = dist_to_col;
+                  leading_speed[slane] = sv;
                 }
               }
             }
@@ -332,7 +336,11 @@ int main() {
               int l = next_lanes[i];
               double ideal_v = ref_v;
               if (collision[l]) {
-                ideal_v = 0;
+                if (l == end_car_lane) {
+                  ideal_v = leading_speed[l];
+                } else {
+                  ideal_v = 0;
+                }
               }
            
               double new_car_v = end_car_v;
