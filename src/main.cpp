@@ -315,10 +315,13 @@ int main() {
             }
 
             vector<int> next_lanes = {end_car_lane};
-            if (end_car_lane != 0)
-              next_lanes.push_back(end_car_lane - 1);
-            if (end_car_lane != 2)
-              next_lanes.push_back(end_car_lane + 1);
+
+            if (end_car_v > 10) {
+              if (end_car_lane != 0)
+                next_lanes.push_back(end_car_lane - 1);
+              if (end_car_lane != 2)
+                next_lanes.push_back(end_car_lane + 1);
+            }
 
             vector<double> cost(next_lanes.size(), 100000000);
             vector<double> speed(next_lanes.size(), ref_v);
