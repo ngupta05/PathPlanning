@@ -287,7 +287,7 @@ int main() {
             //  " ecv: " << end_car_v << std::endl;
             vector<int> min_collision_s = {10000, 10000, 10000};
             vector<bool> collision = {false, false, false};
-            const double COL_TIME_HORIZON = 15 / end_car_v;
+            //const double COL_TIME_HORIZON = 15 / end_car_v;
 
             // sensor fusion data: id, x, y, vx, vy, s, d
             for (int i = 0; i < sensor_fusion.size(); i++) {
@@ -297,17 +297,19 @@ int main() {
               double svy = sensor_fusion[i][4];
               double sv = sqrt(svx * svx + svy * svy) * MPH_TO_MPS;
               int slane = sd / 4;
-              double est_other_end_s = ss + sv * (COL_TIME_HORIZON + prev_size * 0.02);
-              double est_ego_end_s = end_car_s + end_car_v * COL_TIME_HORIZON;
 
-              // cond 1: car is currently behind ego, but will be ahead in future
-              // cond 2: car is currently ahead of ego, but will be behind in future
-              if ((ss <= car_s && est_other_end_s + SAFE_DIST >= est_ego_end_s) ||
-                  (ss >= car_s && est_other_end_s - SAFE_DIST <= est_ego_end_s)) {
+              // calculate time to collide from current path's end
+              // ss + sv * (prev_size * 0.02 + t) = end_car_s + end_car_v * t;
+              double time_to_collision = (ss - end_car_s + sv * prev_size * 0.02) / (end_car_v - sv);
 
+
+              if (time_to_collision >= -5 && time_to_collision <= 5)
+              {
                 collision[slane] = true;
-                if (est_other_end_s < min_collision_s[slane]) {
-                  min_collision_s[slane] = est_other_end_s;
+                double dist_to_col = end_car_s + end_car_v * time_to_collision;
+                dist_to_col = std::max(dist_to_col, end_car_s);
+                if (dist_to_col < min_collision_s[slane]) {
+                  min_collision_s[slane] = dist_to_col;
                 }
               }
             }
