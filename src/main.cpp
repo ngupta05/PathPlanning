@@ -285,10 +285,9 @@ int main() {
 
             //cout << "ecl: " << end_car_lane << " ecs: " << end_car_s << 
             //  " ecv: " << end_car_v << std::endl;
-            vector<int> min_collision_s = {10000, 10000, 10000};
-            vector<int> leading_speed = {50, 50, 50};
+            vector<double> leading_speed = {ref_v, ref_v, ref_v};
+            vector<double> leading_dist = {100000, 100000, 100000};
             vector<bool> collision = {false, false, false};
-            //const double COL_TIME_HORIZON = 15 / end_car_v;
 
             // sensor fusion data: id, x, y, vx, vy, s, d
             for (int i = 0; i < sensor_fusion.size(); i++) {
@@ -298,56 +297,49 @@ int main() {
               double svy = sensor_fusion[i][4];
               double sv = sqrt(svx * svx + svy * svy) * MPH_TO_MPS;
               int slane = sd / 4;
+              if (ss >= end_car_s && ss < end_car_s + 50 && ss < leading_dist[slane]) {
+                leading_dist[slane] = ss;
+                leading_speed[slane] = sv;
+              }
 
               // calculate time to collide from current path's end
               // ss + sv * (prev_size * 0.02 + t) = end_car_s + end_car_v * t;
               double time_to_collision = (ss - end_car_s + sv * prev_size * 0.02) / (end_car_v - sv);
 
               bool same_lane = (slane == end_car_lane);
+              double approx_time_to_change_lane = 30 / std::max(1.0, end_car_v);
+              double atcl = approx_time_to_change_lane;
 
-              if ((!same_lane && time_to_collision >= -2 && time_to_collision <= 5) ||
-                  (same_lane && time_to_collision >= 0 && time_to_collision <= 5))
+              if ((!same_lane && time_to_collision >= -2 && time_to_collision <= atcl) ||
+                  (same_lane && time_to_collision >= 0 && time_to_collision <= atcl))
               {
                 collision[slane] = true;
-                double dist_to_col = end_car_s + end_car_v * time_to_collision;
-                dist_to_col = std::max(dist_to_col, end_car_s);
-                if (dist_to_col < min_collision_s[slane]) {
-                  min_collision_s[slane] = dist_to_col;
-                  leading_speed[slane] = sv;
-                }
               }
             }
 
             vector<int> next_lanes = {end_car_lane};
 
-            if (end_car_v > 10) {
-              if (end_car_lane != 0)
-                next_lanes.push_back(end_car_lane - 1);
-              if (end_car_lane != 2)
-                next_lanes.push_back(end_car_lane + 1);
-            }
+            if (end_car_lane != 0)
+              next_lanes.push_back(end_car_lane - 1);
+            if (end_car_lane != 2)
+              next_lanes.push_back(end_car_lane + 1);
 
-            vector<double> cost(next_lanes.size(), 100000000);
-            vector<double> speed(next_lanes.size(), ref_v);
             double best_next_v = 0;
             int best_next_lane = next_lanes[0];
+            int min_cost = 1000000;
             
             for (int i = 0; i < next_lanes.size(); i++) {
+              double cost = 0;
               int l = next_lanes[i];
-              double ideal_v = ref_v;
+              double new_v = end_car_v + (leading_speed[l] - end_car_v)/50;
+              cost += (ref_v - new_v) * (ref_v - new_v);
               if (collision[l]) {
-                if (l == end_car_lane) {
-                  ideal_v = leading_speed[l];
-                } else {
-                  ideal_v = 0;
-                }
+                cost += 10000; 
               }
-           
-              double new_car_v = end_car_v + (ideal_v - end_car_v) / 50;
 
-              speed[i] = new_car_v;
-              if (new_car_v > best_next_v) {
-                best_next_v = new_car_v;
+              if (cost < min_cost) {
+                min_cost = cost;
+                best_next_v = new_v;
                 best_next_lane = l;
               }
               //std::cout << "l: " << l << " v: " << new_car_v << " ";
