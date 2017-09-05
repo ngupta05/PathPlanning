@@ -305,7 +305,7 @@ int main() {
 
               bool same_lane = (slane == end_car_lane);
 
-              if ((!same_lane && time_to_collision >= -5 && time_to_collision <= 5) ||
+              if ((!same_lane && time_to_collision >= -2 && time_to_collision <= 5) ||
                   (same_lane && time_to_collision >= 0 && time_to_collision <= 5))
               {
                 collision[slane] = true;
@@ -343,12 +343,7 @@ int main() {
                 }
               }
            
-              double new_car_v = end_car_v;
-              if (new_car_v < ideal_v) {
-                new_car_v += 0.2;
-              } else if (new_car_v > ideal_v) {
-                new_car_v -= 0.2;
-              }
+              double new_car_v = end_car_v + (ideal_v - end_car_v) / 50;
 
               speed[i] = new_car_v;
               if (new_car_v > best_next_v) {
