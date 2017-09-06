@@ -1,18 +1,18 @@
 Rubric points:
 1) Car is able to drive 4.32 km without incident
 
-2) Speed limit: Max allowed speed of the car is capped at ref_v. Lines 331-351
+2) Speed limit: Max allowed speed of the car is capped at ref_v while calculating leading speed for each lane. Lines 311-314
 
 3) Max acceleration and jerk are not exceeded. Smoothening is done using spline curve which limits acceleration and jerk. Acceleration and jerk calculation is not done explicitly as spline curve suffices. Refered project walkthrough: https://www.youtube.com/watch?time_continue=2328&v=7sI3VHFPP0w
-Lines 380-407
+Lines 394-421
 
-4) Car does not have collision: Collision prediction is done using sensor fusion data, and speed and lane is changed accordingly. Lane change is allowed only if speed > 10 m/s. Lines 288 - 351
+4) Car does not have collision: Collision prediction is done using sensor fusion data, and speed and lane is changed accordingly. Lines 296-366
 
 5) Car stays in lane except changing lanes: Waypoints selected are at delta-s of 30, 60, 90 ahead of the car and lies at center of lanes. Again this is not a fool proof solution but selecting waypoints in this manner and other heuristics handles this case.
 
-6) Lines 331 - 351: Best lane is selected based on speed possible in each lane
+6) Lines 343 - 366: Best lane is selected based on speed possible in each lane
 
 Model for generating paths:
 Reference: https://www.youtube.com/watch?time_continue=2328&v=7sI3VHFPP0w
 
-Firstly last two points from last trajectory are taken and forms the initial path for the current cycle. If no trajectory from last cycle exists, current position and extrapolated previous position form the initial path. Next new waypoints are added to the path. The waypoints are added according to "best lane" logic which takes into account max possible speeds in each lane. If in any lane, collision in predicted few seconds into future or few seconds in the past (to keep some buffer), then the best possible speed for that lane is set to zero (effectively increasing cost for that lane). Lane change is also disallowed till a certain minimum speed is achieved (10m/s, roughly half of speed limit), to allow ego and other cars to adjust. Once waypoints are selected this way, spline curve is fit which generates a smooth path and controls acceleration and jerk. Keeping last two points from last trajectory ensures continuity and since prediction into future is done for only few seconds into the future, this lets us handle dynamism to some extent.
+Firstly last two points from last trajectory are taken and forms the initial path for the current cycle. If no trajectory from last cycle exists, current position and extrapolated previous position form the initial path. Next new waypoints are added to the path. The waypoints are added according to "best lane" logic which takes into account max possible speeds in each lane, possibility of collision, potential collision(gap from other vehicles). If in any lane, collision in predicted few seconds into future or few seconds in the past (to keep some buffer), then it incurs max cost. Once a lane change behaviour is decided, no change in target speed and target velocity is done till lane change is accomplished. Once waypoints are selected this way, spline curve is fit which generates a smooth path and controls acceleration and jerk. Keeping last two points from last trajectory ensures continuity and since prediction into future is done for only few seconds into the future, this lets us handle dynamism to some extent.

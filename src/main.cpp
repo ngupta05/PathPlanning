@@ -5,6 +5,7 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <stdlib.h>
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
@@ -162,6 +163,9 @@ vector<double> getXY(double s, double d, vector<double> maps_s, vector<double> m
 
 const double MPH_TO_MPS = 1609.34 / 3600;
 double ref_v = 49 * MPH_TO_MPS; // reference vel in m/s
+bool lane_change_engaged = false;
+int target_ego_lane = -1;
+double target_ego_v = ref_v;
 
 int main() {
   uWS::Hub h;
@@ -238,9 +242,7 @@ int main() {
           	auto sensor_fusion = j[1]["sensor_fusion"];
             int prev_size = previous_path_x.size();
 
-            const double SAFE_DIST = 5; // metres
             const double PRED_STEPS_HORIZON = 50;
-            const double PRED_TIME_HORIZON = PRED_STEPS_HORIZON * 0.02; // secs
             double car_v = car_speed * MPH_TO_MPS;
 
           	json msgJson;
@@ -250,6 +252,7 @@ int main() {
 
             double ref_x = car_x;
             double ref_y = car_y;
+            int cur_car_lane = car_d / 4;
             int end_car_lane = end_path_d / 4;
             double end_car_s = end_path_s;
             double end_car_v = car_v;
@@ -282,81 +285,105 @@ int main() {
 
               end_car_v = sqrt(std::pow(ref_x - prev_ref_x, 2) + std::pow(ref_y - prev_ref_y, 2)) / 0.02;
             }
-
-            //cout << "ecl: " << end_car_lane << " ecs: " << end_car_s << 
-            //  " ecv: " << end_car_v << std::endl;
-            vector<double> leading_speed = {ref_v, ref_v, ref_v};
-            vector<double> leading_dist = {100000, 100000, 100000};
-            vector<bool> collision = {false, false, false};
-
-            // sensor fusion data: id, x, y, vx, vy, s, d
-            for (int i = 0; i < sensor_fusion.size(); i++) {
-              int sd = sensor_fusion[i][6];
-              double ss = sensor_fusion[i][5];
-              double svx = sensor_fusion[i][3];
-              double svy = sensor_fusion[i][4];
-              double sv = sqrt(svx * svx + svy * svy) * MPH_TO_MPS;
-              int slane = sd / 4;
-              if (ss >= end_car_s && ss < end_car_s + 50 && ss < leading_dist[slane]) {
-                leading_dist[slane] = ss;
-                leading_speed[slane] = sv;
-              }
-
-              // calculate time to collide from current path's end
-              // ss + sv * (prev_size * 0.02 + t) = end_car_s + end_car_v * t;
-              double time_to_collision = (ss - end_car_s + sv * prev_size * 0.02) / (end_car_v - sv);
-
-              bool same_lane = (slane == end_car_lane);
-              double approx_time_to_change_lane = 30 / std::max(1.0, end_car_v);
-              double atcl = approx_time_to_change_lane;
-
-              if ((!same_lane && time_to_collision >= -2 && time_to_collision <= atcl) ||
-                  (same_lane && time_to_collision >= 0 && time_to_collision <= atcl))
-              {
-                collision[slane] = true;
-              }
-            }
-
-            vector<int> next_lanes = {end_car_lane};
-
-            if (end_car_lane != 0)
-              next_lanes.push_back(end_car_lane - 1);
-            if (end_car_lane != 2)
-              next_lanes.push_back(end_car_lane + 1);
-
-            double best_next_v = 0;
-            int best_next_lane = next_lanes[0];
-            int min_cost = 1000000;
             
-            for (int i = 0; i < next_lanes.size(); i++) {
-              double cost = 0;
-              int l = next_lanes[i];
-              double new_v = end_car_v + (leading_speed[l] - end_car_v)/50;
-              cost += (ref_v - new_v) * (ref_v - new_v);
-              if (collision[l]) {
-                cost += 10000; 
-              }
-
-              if (cost < min_cost) {
-                min_cost = cost;
-                best_next_v = new_v;
-                best_next_lane = l;
-              }
-              //std::cout << "l: " << l << " v: " << new_car_v << " ";
+            if (lane_change_engaged && 
+                cur_car_lane == end_car_lane &&
+                cur_car_lane == target_ego_lane) {
+              // lane change completed
+              lane_change_engaged = false;
             }
-            //std::cout << std::endl;
 
-            //std::cout << "nbv: " << best_next_v <<
-            //  " nbl: " << best_next_lane << std::endl;
+            
+            if (!lane_change_engaged) {
+              vector<double> leading_speed = {ref_v, ref_v, ref_v};
+              vector<double> leading_dist = {100000, 100000, 100000};
+              vector<bool> col = {false, false, false};
+              vector<bool> pot_col = {false, false, false};
 
-            //std::cout << collision << " min_s:" << min_collision_s << " ideal_v:" << ideal_v << " car_v:" << car_v << " new_v:" << new_car_v << std::endl;
-            //double s_delta = new_car_v * 0.02;
+            
+              // sensor fusion data: id, x, y, vx, vy, s, d
+              for (int i = 0; i < sensor_fusion.size(); i++) {
+                int sd = sensor_fusion[i][6];
+                double ss = sensor_fusion[i][5];
+                double svx = sensor_fusion[i][3];
+                double svy = sensor_fusion[i][4];
+                double sv = sqrt(svx * svx + svy * svy) * MPH_TO_MPS;
+                int slane = sd / 4;
+                if (ss >= car_s && ss < (end_car_s + 20) && ss < leading_dist[slane]){
+                  leading_dist[slane] = ss;
+                  leading_speed[slane] = std::min(ref_v, sv);
+                }
 
+                if (slane != end_car_lane && ss > car_s - 20 && ss < end_car_s + 20) {
+                  pot_col[slane] = true;
+                }
+
+                // for collision, following holds:
+                // end position of ego and other car would be same at some time t
+                // from end_path
+                // assuming constant velocity for both
+                // ss + (prev_size * 0.02 + t) * sv = end_car_s + end_car_v * t;
+                double tc = (ss + prev_size * 0.02 * sv - end_car_s) /
+                            std::max(end_car_v - sv, 0.01);
+                bool too_close = (ss > car_s - 10 && ss < end_car_s + 10);
+
+                if (slane != end_car_lane && (too_close || (tc > -1 && tc <= 2))) {
+                  col[slane] = true;
+                }
+              }
+
+              vector<int> next_lanes = {end_car_lane};
+
+              if (end_car_lane != 0)
+                next_lanes.push_back(end_car_lane - 1);
+              if (end_car_lane != 2)
+                next_lanes.push_back(end_car_lane + 1);
+
+              int min_cost = 1000000;
+            
+              for (int i = 0; i < next_lanes.size(); i++) {
+                double cost = 0;
+                int l = next_lanes[i];
+                double speed = leading_speed[l];
+
+                // speed cost
+                cost += (ref_v - speed) * (ref_v - speed);
+
+                // collision cost
+                if (col[l]) {
+                  cost += 10000;
+                }
+
+                if (pot_col[l]) {
+                  cost += 1000;
+                }
+
+                if (l == end_car_lane) {
+                  bool prefer_lane_change = (rand() % 100 == 0);
+                  if (prefer_lane_change) {
+                    cost += 5; // tie break cases when leading v is same
+                  }
+                }
+
+                if (cost < min_cost) {
+                  min_cost = cost;
+                  target_ego_v = speed;
+                  target_ego_lane = l;
+                }
+              }
+            }
+            
+            if (target_ego_lane != cur_car_lane) {
+              lane_change_engaged = true;
+            }
+           
+            double next_ego_v = end_car_v + (target_ego_v - end_car_v)/25;
+            
             vector<vector<double>> next_mp;
             double wp_delta = 30;
             for (int i = 0; i < 3; i++) {
               double delta = (i + 1) * wp_delta;
-              vector<double> wp = getXY(end_car_s + delta, 2 + 4 * best_next_lane,
+              vector<double> wp = getXY(end_car_s + delta, 2 + 4 * target_ego_lane,
                 map_waypoints_s, map_waypoints_x, map_waypoints_y);
               next_mp.push_back(wp);
               ptsx.push_back(wp[0]);
@@ -384,7 +411,7 @@ int main() {
 
             for (int i = 1; i <= PRED_STEPS_HORIZON - previous_path_x.size();
                 i++) {
-              double N = (target_dist/(0.02 * best_next_v));
+              double N = (target_dist/(0.02 * next_ego_v));
               double x_point = i * target_x / N;
               double y_point = s(x_point);
 
@@ -400,18 +427,7 @@ int main() {
               next_x_vals.push_back(x_point);
               next_y_vals.push_back(y_point);
             }
-
-
-            /*for(int i = 0; i < PRED_STEPS_HORIZON; i++) {
-              double next_s = car_s + (i+1) * s_delta;
-              double next_d = 2 + lane * 4;
-              auto vec = getXY(next_s, next_d, map_waypoints_s,
-                  map_waypoints_x, map_waypoints_y);
-                
-              next_x_vals.push_back(vec[0]);
-              next_y_vals.push_back(vec[1]);
-            }*/
-
+            
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
 
